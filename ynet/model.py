@@ -12,7 +12,8 @@ from utils.image_utils import create_gaussian_heatmap_template, create_dist_mat,
 from utils.dataloader import SceneDataset, scene_collate
 from test import evaluate
 from train import train
-
+from online_predict import predict
+from utils.preprocess_pgm import get_segmentation_from_pgm
 
 class YNetEncoder(nn.Module):
 	def __init__(self, in_channels, channels=(64, 128, 256, 512, 512)):
@@ -411,6 +412,35 @@ class YNet:
 
 		print(f'\n\nAverage performance over {rounds} rounds: \nTest ADE: {sum(self.eval_ADE) / len(self.eval_ADE)} \nTest FDE: {sum(self.eval_FDE) / len(self.eval_FDE)}')
 
+	def predict(self, trajectory, params, image_path, num_goals=20, num_traj=1, device=None):
+		if device is None:
+			device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+		obs_len = self.obs_len
+		pred_len = self.pred_len
+		total_len = pred_len + obs_len
+
+		print('Preprocess data')
+		test_images = get_segmentation_from_pgm(image_path, params, self.division_factor)
+
+		model = self.model.to(device)
+
+		# Create template
+		size = int(8400 * params['resize'])
+
+		input_template = torch.Tensor(create_dist_mat(size=size)).to(device)
+
+		self.eval_ADE = []
+		self.eval_FDE = []
+
+		print('Start testing')
+		waypoint_samples, future_samples = predict(trajectory, model, test_images, num_goals, num_traj,
+										  device=device, input_template=input_template,
+										  waypoints=params['waypoints'],
+										  temperature=params['temperature'], use_TTST=True,
+										  use_CWS=True if len(params['waypoints']) > 1 else False,
+										  rel_thresh=params['rel_threshold'], CWS_params=params['CWS_params'])
+		return waypoint_samples, future_samples
 
 	def load(self, path):
 		print(self.model.load_state_dict(torch.load(path)))
